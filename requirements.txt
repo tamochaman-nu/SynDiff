@@ -1,0 +1,6 @@
+numpy
+h5py
+scikit-image
+ninja
+tensorflow
+scipy

@@ -74,6 +74,33 @@ python test.py --image_size 256 --exp exp_syndiff --num_channels 2 --num_channel
 <br />
 
 
+
+## Docker Usage
+
+You can use Docker to run the training and testing scripts in a consistent environment.
+
+### 1. Build the Docker Image
+```bash
+docker compose build
+```
+
+### 2. Run Training
+```bash
+docker compose run --rm syndiff python train.py --input_path /path/to/data --output_path /path/to/results [args...]
+```
+
+### 3. Run Testing
+```bash
+docker compose run --rm syndiff python test.py --input_path /path/to/data --output_path /path/to/results [args...]
+```
+
+### Note on GPU Support
+The provided `docker-compose.yml` is configured to use NVIDIA GPUs. Ensure you have the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on your host machine.
+
+### Note on Dataset Naming
+The `dataset.py` expects files to be named following the pattern `data_{phase}_{contrast}.mat` (e.g., `data_train_T1.mat`). 
+If you are using the sample data provided in `SynDiff_sample_data`, please ensure they are renamed or structured accordingly within your `input_path`.
+
 # Citation
 Preliminary versions of SynDiff are presented in [NeurIPS Medical Imaging Meets](https://www.cse.cuhk.edu.hk/~qdou/public/medneurips2022/105.pdf) and IEEE ISBI 2023.
 You are encouraged to modify/distribute this code. However, please acknowledge this code and cite the paper appropriately.

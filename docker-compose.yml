@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  syndiff:
+    build: .
+    image: syndiff:latest
+    container_name: syndiff
+    volumes:
+      - .:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    working_dir: /app
