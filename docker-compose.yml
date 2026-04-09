@@ -7,6 +7,7 @@ services:
     container_name: syndiff
     volumes:
       - .:/app
+      - /mnt/NAS:/mnt/NAS
     deploy:
       resources:
         reservations:

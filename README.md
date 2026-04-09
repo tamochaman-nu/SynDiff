@@ -1,109 +1,102 @@
-# SynDiff
+# SynDiff (Adapted for Anime Style Transfer)
 
 Official PyTorch implementation of SynDiff described in the [paper](https://ieeexplore.ieee.org/document/10167641).
-
-Muzaffer Özbey*, Onat Dalmaz*, Salman UH Dar, Hasan A Bedel, Şaban Özturk, Alper Güngör, Tolga Çukur, "Unsupervised Medical Image Translation With Adversarial Diffusion Models," in IEEE Transactions on Medical Imaging, vol. 42, no. 12, pp. 3524-3539, Dec. 2023, doi: 10.1109/TMI.2023.3290149.
-
-*: equal contribution
+This fork includes adaptations for **RGB image processing** and **Unpaired Style Transfer** (e.g., Real <-> Anime).
 
 <img src="./figures/adv_diff.png" width="600px">
 
-<img src="./figures/syndiff.png" width="600px">
+## Key Feature Updates
+- **RGB Support**: Built-in 3-channel image handling for standard JPG/PNG datasets.
+- **Unpaired Translation**: New dataset loader for non-aligned data (Real images and Anime drawings).
+- **Flexible Options**: Centralized parameter management in `options.py`.
+- **Easy Dataset Prep**: Symbolic link-based data preparation tool for large external datasets (NAS).
 
 ## Dependencies
 
-```
-python>=3.6.9
-torch>=1.7.1
-torchvision>=0.8.2
-cuda=>11.2
-ninja
-python3.x-dev (apt install, x should match your python3 version, ex: 3.8)
-```
+- Docker & Docker Compose (Recommended)
+- OR:
+  ```
+  python>=3.8
+  torch>=1.12.1
+  torchvision
+  cuda=>11.3
+  ninja
+  h5py, scikit-image, scipy
+  ```
 
 ## Installation
-- Clone this repo:
 ```bash
 git clone https://github.com/icon-lab/SynDiff
 cd SynDiff
 ```
 
-## Dataset
-You should structure your aligned dataset in the following way:
+## Dataset Preparation
 
+For Style Transfer (e.g., Real world faces to Anime style), organize your images in two separate directories. Then, use the provided `prepare_data.py` script to create the required symlink structure:
 
-
+```bash
+python3 prepare_data.py \
+  --real_dir /path/to/real_images \
+  --anime_dir /path/to/anime_images \
+  --target_dir data/data_anime \
+  --total_size 5000 \
+  --ratios 8:1:1
 ```
-input_path/
-  ├── data_train_contrast1.mat
-  ├── data_train_contrast2.mat
-  ├── data_val_contrast1.mat
-  ├── data_val_contrast2.mat
-  ├── data_test_contrast1.mat
-  ├── data_test_contrast2.mat
+This creates a structure like:
 ```
-
-where .mat files has shape of (#images, width, height) and image values are between 0 and 1.0. 
-### Sample Data
-Sample toy data can also found under 'SynDiff_sample_data' folder of the repository. 
-
-
-
-## Train
-
-<br />
-
-```
-python3 train.py --image_size 256 --exp exp_syndiff --num_channels 2 --num_channels_dae 64 --ch_mult 1 1 2 2 4 4 --num_timesteps 4 --num_res_blocks 2 --batch_size 1 --contrast1 T1 --contrast2 T2 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. --z_emb_dim 256 --lr_d 1e-4 --lr_g 1.6e-4 --lazy_reg 10 --num_process_per_node 1 --save_content --local_rank 0 --input_path /input/path/for/data --output_path /output/for/results
+data/data_anime/
+  ├── trainA/ (Real links)
+  ├── trainB/ (Anime links)
+  ├── valA/
+  ├── valB/
+  └── ...
 ```
 
-<br />
+## Training
 
-## Pretrained Models
-We have released pretrained diffusive generators for [T1->PD and PD->T1](https://drive.google.com/file/d/1Hfvnz29NaTFqPMX6RGaEv4Qnt8HeoxZz/view?usp=sharing) tasks in IXI and [T1->T2 and T2->T1](https://drive.google.com/file/d/1zGzZPVY-Xp2Flc7GicOD7s4taxcjwCsn/view?usp=sharing) tasks in BRATS datasets. You can save these weights in relevant checkpoints folder and perform inference.
+To train the model for Anime Style Transfer (RGB, 256x256):
 
-## Test
-
-<br />
-
+```bash
+docker compose run --rm syndiff python train.py \
+  --exp anime_transfer \
+  --input_path data/data_anime \
+  --output_path checkpoints \
+  --num_channels 3 \
+  --image_size 256 \
+  --batch_size 1 \
+  --num_epoch 200 \
+  --use_ema
 ```
-python test.py --image_size 256 --exp exp_syndiff --num_channels 2 --num_channels_dae 64 --ch_mult 1 1 2 2 4 4 --num_timesteps 4 --num_res_blocks 2 --batch_size 1 --embedding_type positional  --z_emb_dim 256 --contrast1 T1  --contrast2 T2 --which_epoch 50 --gpu_chose 0 --input_path /input/path/for/data --output_path /output/for/results
+
+## Testing
+
+To perform inference using a trained model:
+
+```bash
+docker compose run --rm syndiff python test.py \
+  --exp anime_transfer \
+  --input_path data/data_anime \
+  --output_path results \
+  --num_channels 3 \
+  --image_size 256 \
+  --which_epoch 200
 ```
-
-<br />
-<br />
-
-
 
 ## Docker Usage
-
-You can use Docker to run the training and testing scripts in a consistent environment.
 
 ### 1. Build the Docker Image
 ```bash
 docker compose build
 ```
 
-### 2. Run Training
+### 2. General Run Format
 ```bash
-docker compose run --rm syndiff python train.py --input_path /path/to/data --output_path /path/to/results [args...]
+docker compose run --rm syndiff python train.py [options]
 ```
 
-### 3. Run Testing
-```bash
-docker compose run --rm syndiff python test.py --input_path /path/to/data --output_path /path/to/results [args...]
-```
+## Citation
+Muzaffer Özbey*, Onat Dalmaz*, Salman UH Dar, Hasan A Bedel, Şaban Özturk, Alper Güngör, Tolga Çukur, "Unsupervised Medical Image Translation With Adversarial Diffusion Models," in IEEE Transactions on Medical Imaging, vol. 42, no. 12, pp. 3524-3539, Dec. 2023, doi: 10.1109/TMI.2023.3290149.
 
-### Note on GPU Support
-The provided `docker-compose.yml` is configured to use NVIDIA GPUs. Ensure you have the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on your host machine.
-
-### Note on Dataset Naming
-The `dataset.py` expects files to be named following the pattern `data_{phase}_{contrast}.mat` (e.g., `data_train_T1.mat`). 
-If you are using the sample data provided in `SynDiff_sample_data`, please ensure they are renamed or structured accordingly within your `input_path`.
-
-# Citation
-Preliminary versions of SynDiff are presented in [NeurIPS Medical Imaging Meets](https://www.cse.cuhk.edu.hk/~qdou/public/medneurips2022/105.pdf) and IEEE ISBI 2023.
-You are encouraged to modify/distribute this code. However, please acknowledge this code and cite the paper appropriately.
 ```
 @ARTICLE{ozbey_dalmaz_syndiff_2024,
   author={Özbey, Muzaffer and Dalmaz, Onat and Dar, Salman U. H. and Bedel, Hasan A. and Özturk, Şaban and Güngör, Alper and Çukur, Tolga},
@@ -113,17 +106,8 @@ You are encouraged to modify/distribute this code. However, please acknowledge t
   volume={42},
   number={12},
   pages={3524-3539},
-  keywords={Biological system modeling;Computational modeling;Training;Generative adversarial networks;Image synthesis;Task analysis;Generators;Medical image translation;synthesis;unsupervised;unpaired;adversarial;diffusion;generative},
   doi={10.1109/TMI.2023.3290149}}
-
-
 ```
-For any questions, comments and contributions, please contact Muzaffer Özbey (muzafferozbey94[at]gmail.com) or Onat Dalmaz (onat[at]stanford.edu) <br />
-
-(c) ICON Lab 2023
-
-<br />
 
 # Acknowledgements
-
-This code uses libraries from, [pGAN](https://github.com/icon-lab/pGAN-cGAN), [StyleGAN-2](https://github.com/NVlabs/stylegan2), and [DD-GAN](https://github.com/NVlabs/denoising-diffusion-gan) repositories.
+This code uses libraries from [pGAN](https://github.com/icon-lab/pGAN-cGAN), [StyleGAN-2](https://github.com/NVlabs/stylegan2), and [DD-GAN](https://github.com/NVlabs/denoising-diffusion-gan) repositories.

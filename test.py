@@ -8,6 +8,7 @@ import torch.optim as optim
 import torchvision
 from backbones.ncsnpp_generator_adagn import NCSNpp
 from dataset import CreateDatasetSynthesis
+from options import TestOptions
 
 import torch.nn.functional as F
 
@@ -119,8 +120,8 @@ def sample_posterior(coefficients, x_0,x_t, t):
     return sample_x_pos
 
 def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
-    x = x_init[:,[0],:]
-    source = x_init[:,[1],:]
+    x = x_init[:, 0 : opt.num_channels, :, :]
+    source = x_init[:, opt.num_channels : 2 * opt.num_channels, :, :]
     with torch.no_grad():
         for i in reversed(range(n_time)):
             t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
@@ -128,7 +129,7 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
             t_time = t
             latent_z = torch.randn(x.size(0), opt.nz, device=x.device)#.to(x.device)
             x_0 = generator(torch.cat((x,source),axis=1), t_time, latent_z)
-            x_new = sample_posterior(coefficients, x_0[:,[0],:], x, t)
+            x_new = sample_posterior(coefficients, x_0[:, 0 : opt.num_channels, :, :], x, t)
             x = x_new.detach()
         
     return x
@@ -156,14 +157,16 @@ def sample_and_test(args):
 
     #loading dataset
     phase='test'
-    dataset=CreateDatasetSynthesis('test', args.input_path, args.contrast1, args.contrast2)
+    dataset=CreateDatasetSynthesis('test', args.input_path, args.contrast1, args.contrast2, image_size=args.image_size)
     data_loader = torch.utils.data.DataLoader(dataset,
                                                batch_size=1,
                                                shuffle=False,
                                                num_workers=4)
     #Initializing and loading network
+    args.num_channels = args.num_channels * 2
     gen_diffusive_1 = NCSNpp(args).to(device)
     gen_diffusive_2 = NCSNpp(args).to(device)
+    args.num_channels = args.num_channels // 2
 
     exp = args.exp
     output_dir = args.output_path
@@ -185,8 +188,8 @@ def sample_and_test(args):
         os.makedirs(save_dir)
     loss1 = np.zeros((1,len(data_loader)))
     loss2 = np.zeros((1,len(data_loader)))
-    syn_im1=np.zeros((256,256,len(data_loader)))
-    syn_im2=np.zeros((256,256,len(data_loader)))
+    syn_im1=np.zeros((args.num_channels, 256, 152, len(data_loader)))
+    syn_im2=np.zeros((args.num_channels, 256, 152, len(data_loader)))
     for iteration, (x , y) in enumerate(data_loader): 
         
         real_data = x.to(device, non_blocking=True)
@@ -204,7 +207,7 @@ def sample_and_test(args):
         fake_sample1 = crop(fake_sample1) 
         real_data = crop(real_data)
         source_data = crop(source_data) 
-        syn_im1[:,:,iteration]=np.squeeze(fake_sample1.cpu().numpy())
+        syn_im1[:,:,:,iteration]=fake_sample1.cpu().numpy()
         
         loss1[0, iteration] = psnr(fake_sample1, real_data).cpu().numpy()
         print(str(iteration))
@@ -230,7 +233,7 @@ def sample_and_test(args):
         fake_sample2 = crop(fake_sample2) 
         real_data = crop(real_data)
         source_data = crop(source_data)
-        syn_im2[:,:,iteration]=np.squeeze(fake_sample2.cpu().numpy()) 
+        syn_im2[:,:,:,iteration]=fake_sample2.cpu().numpy() 
         
         loss2[0, iteration] = psnr(fake_sample2, real_data).cpu().numpy()
         print(str(iteration))
@@ -250,95 +253,5 @@ def sample_and_test(args):
             
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('syndiff parameters')
-    parser.add_argument('--seed', type=int, default=1024,
-                        help='seed used for initialization')
-    parser.add_argument('--compute_fid', action='store_true', default=False,
-                            help='whether or not compute FID')
-    parser.add_argument('--epoch_id', type=int,default=1000)
-    parser.add_argument('--num_channels', type=int, default=3,
-                            help='channel of image')
-    parser.add_argument('--centered', action='store_false', default=True,
-                            help='-1,1 scale')
-    parser.add_argument('--use_geometric', action='store_true',default=False)
-    parser.add_argument('--beta_min', type=float, default= 0.1,
-                            help='beta_min for diffusion')
-    parser.add_argument('--beta_max', type=float, default=20.,
-                            help='beta_max for diffusion')
-    
-    
-    parser.add_argument('--num_channels_dae', type=int, default=128,
-                            help='number of initial channels in denosing model')
-    parser.add_argument('--n_mlp', type=int, default=3,
-                            help='number of mlp layers for z')
-    parser.add_argument('--ch_mult', nargs='+', type=int,
-                            help='channel multiplier')
-
-    parser.add_argument('--num_res_blocks', type=int, default=2,
-                            help='number of resnet blocks per scale')
-    parser.add_argument('--attn_resolutions', default=(16,),
-                            help='resolution of applying attention')
-    parser.add_argument('--dropout', type=float, default=0.,
-                            help='drop-out rate')
-    parser.add_argument('--resamp_with_conv', action='store_false', default=True,
-                            help='always up/down sampling with conv')
-    parser.add_argument('--conditional', action='store_false', default=True,
-                            help='noise conditional')
-    parser.add_argument('--fir', action='store_false', default=True,
-                            help='FIR')
-    parser.add_argument('--fir_kernel', default=[1, 3, 3, 1],
-                            help='FIR kernel')
-    parser.add_argument('--skip_rescale', action='store_false', default=True,
-                            help='skip rescale')
-    parser.add_argument('--resblock_type', default='biggan',
-                            help='tyle of resnet block, choice in biggan and ddpm')
-    parser.add_argument('--progressive', type=str, default='none', choices=['none', 'output_skip', 'residual'],
-                            help='progressive type for output')
-    parser.add_argument('--progressive_input', type=str, default='residual', choices=['none', 'input_skip', 'residual'],
-                        help='progressive type for input')
-    parser.add_argument('--progressive_combine', type=str, default='sum', choices=['sum', 'cat'],
-                        help='progressive combine method.')
-
-    parser.add_argument('--embedding_type', type=str, default='positional', choices=['positional', 'fourier'],
-                        help='type of time embedding')
-    parser.add_argument('--fourier_scale', type=float, default=16.,
-                            help='scale of fourier transform')
-    parser.add_argument('--not_use_tanh', action='store_true',default=False)
-    
-    #geenrator and training
-    parser.add_argument('--exp', default='ixi_synth', help='name of experiment')
-    parser.add_argument('--input_path', help='path to input data')
-    parser.add_argument('--output_path', help='path to output saves')
-
-    parser.add_argument('--dataset', default='cifar10', help='name of dataset')
-    parser.add_argument('--image_size', type=int, default=32,
-                            help='size of image')
-
-    parser.add_argument('--nz', type=int, default=100)
-    parser.add_argument('--num_timesteps', type=int, default=4)
-    
-    
-    parser.add_argument('--z_emb_dim', type=int, default=256)
-    parser.add_argument('--t_emb_dim', type=int, default=256)
-    parser.add_argument('--batch_size', type=int, default=1, help='sample generating batch size')
-    
-    #optimizaer parameters    
-    parser.add_argument('--lr_g', type=float, default=1.5e-4, help='learning rate g')
-    parser.add_argument('--beta1', type=float, default=0.5,
-                            help='beta1 for adam')
-    parser.add_argument('--beta2', type=float, default=0.9,
-                            help='beta2 for adam')
-    parser.add_argument('--contrast1', type=str, default='T1',
-                        help='contrast selection for model')
-    parser.add_argument('--contrast2', type=str, default='T2',
-                        help='contrast selection for model')
-    parser.add_argument('--which_epoch', type=int, default=50)
-    parser.add_argument('--gpu_chose', type=int, default=0)
-
-
-    parser.add_argument('--source', type=str, default='T2',
-                        help='source contrast')   
-    args = parser.parse_args()
-    
+    args = TestOptions().parse()
     sample_and_test(args)
-    

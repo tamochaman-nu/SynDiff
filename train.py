@@ -14,6 +14,7 @@ import torchvision
 
 import torchvision.transforms as transforms
 from dataset import CreateDatasetSynthesis
+from options import TrainOptions
 
 from torch.multiprocessing import Process
 import torch.distributed as dist
@@ -167,8 +168,8 @@ def sample_posterior(coefficients, x_0,x_t, t):
     return sample_x_pos
 
 def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
-    x = x_init[:,[0],:]
-    source = x_init[:,[1],:]
+    x = x_init[:, 0 : opt.num_channels, :, :]
+    source = x_init[:, opt.num_channels : 2 * opt.num_channels, :, :]
     with torch.no_grad():
         for i in reversed(range(n_time)):
             t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
@@ -176,7 +177,7 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
             t_time = t
             latent_z = torch.randn(x.size(0), opt.nz, device=x.device)#.to(x.device)
             x_0 = generator(torch.cat((x,source),axis=1), t_time, latent_z)
-            x_new = sample_posterior(coefficients, x_0[:,[0],:], x, t)
+            x_new = sample_posterior(coefficients, x_0[:, 0 : opt.num_channels, :, :], x, t)
             x = x_new.detach()
         
     return x
@@ -206,8 +207,8 @@ def train_syndiff(rank, gpu, args):
     nz = args.nz #latent dimension
     
 
-    dataset = CreateDatasetSynthesis(phase = "train", input_path = args.input_path, contrast1 = args.contrast1, contrast2 = args.contrast2)
-    dataset_val = CreateDatasetSynthesis(phase = "val", input_path = args.input_path, contrast1 = args.contrast1, contrast2 = args.contrast2 )
+    dataset = CreateDatasetSynthesis(phase = "train", input_path = args.input_path, contrast1 = args.contrast1, contrast2 = args.contrast2, image_size=args.image_size)
+    dataset_val = CreateDatasetSynthesis(phase = "val", input_path = args.input_path, contrast1 = args.contrast1, contrast2 = args.contrast2, image_size=args.image_size)
 
 
     
@@ -234,27 +235,32 @@ def train_syndiff(rank, gpu, args):
 
     val_l1_loss=np.zeros([2,args.num_epoch,len(data_loader_val)])
     val_psnr_values=np.zeros([2,args.num_epoch,len(data_loader_val)])
+    syn_im1=np.zeros((args.num_channels, 256, 152, len(data_loader)))
+    syn_im2=np.zeros((args.num_channels, 256, 152, len(data_loader)))
     print('train data size:'+str(len(data_loader)))
     print('val data size:'+str(len(data_loader_val)))
     to_range_0_1 = lambda x: (x + 1.) / 2.
 
     #networks performing reverse denoising
+    #Initializing and loading network
+    args.num_channels = args.num_channels * 2
     gen_diffusive_1 = NCSNpp(args).to(device)
-    gen_diffusive_2 = NCSNpp(args).to(device)  
+    gen_diffusive_2 = NCSNpp(args).to(device)
+    args.num_channels = args.num_channels // 2 # Restore for others
     #networks performing translation
-    args.num_channels=1
-    gen_non_diffusive_1to2 = backbones.generator_resnet.define_G(netG='resnet_6blocks',gpu_ids=[gpu])
-    gen_non_diffusive_2to1 = backbones.generator_resnet.define_G(netG='resnet_6blocks',gpu_ids=[gpu])
+    # args.num_channels=1  <-- REMOVED hardcoding
+    gen_non_diffusive_1to2 = backbones.generator_resnet.define_G(input_nc=args.num_channels, output_nc=args.num_channels, netG='resnet_6blocks',gpu_ids=[gpu])
+    gen_non_diffusive_2to1 = backbones.generator_resnet.define_G(input_nc=args.num_channels, output_nc=args.num_channels, netG='resnet_6blocks',gpu_ids=[gpu])
     
-    disc_diffusive_1 = Discriminator_large(nc = 2, ngf = args.ngf, 
+    disc_diffusive_1 = Discriminator_large(nc = args.num_channels * 2, ngf = args.ngf, 
                                    t_emb_dim = args.t_emb_dim,
                                    act=nn.LeakyReLU(0.2)).to(device)
-    disc_diffusive_2 = Discriminator_large(nc = 2, ngf = args.ngf, 
+    disc_diffusive_2 = Discriminator_large(nc = args.num_channels * 2, ngf = args.ngf, 
                                    t_emb_dim = args.t_emb_dim,
                                    act=nn.LeakyReLU(0.2)).to(device)
     
-    disc_non_diffusive_cycle1 = backbones.generator_resnet.define_D(gpu_ids=[gpu])
-    disc_non_diffusive_cycle2 = backbones.generator_resnet.define_D(gpu_ids=[gpu])
+    disc_non_diffusive_cycle1 = backbones.generator_resnet.define_D(input_nc=args.num_channels, gpu_ids=[gpu])
+    disc_non_diffusive_cycle2 = backbones.generator_resnet.define_D(input_nc=args.num_channels, gpu_ids=[gpu])
     
     broadcast_params(gen_diffusive_1.parameters())
     broadcast_params(gen_diffusive_2.parameters())
@@ -543,8 +549,8 @@ def train_syndiff(rank, gpu, args):
             x1_0_predict_diff = gen_diffusive_1(torch.cat((x1_tp1.detach(),x2_0_predict),axis=1), t1, latent_z1)
             x2_0_predict_diff = gen_diffusive_2(torch.cat((x2_tp1.detach(),x1_0_predict),axis=1), t2, latent_z2)            
             #sampling q(x_t | x_0_predict, x_t+1)
-            x1_pos_sample = sample_posterior(pos_coeff, x1_0_predict_diff[:,[0],:], x1_tp1, t1)
-            x2_pos_sample = sample_posterior(pos_coeff, x2_0_predict_diff[:,[0],:], x2_tp1, t2)
+            x1_pos_sample = sample_posterior(pos_coeff, x1_0_predict_diff[:, 0 : args.num_channels, :, :], x1_tp1, t1)
+            x2_pos_sample = sample_posterior(pos_coeff, x2_0_predict_diff[:, 0 : args.num_channels, :, :], x2_tp1, t2)
             #D output for fake sample x_pos_sample
             output1 = disc_diffusive_1(x1_pos_sample, t1, x1_tp1.detach()).view(-1)
             output2 = disc_diffusive_2(x2_pos_sample, t2, x2_tp1.detach()).view(-1)  
@@ -570,8 +576,8 @@ def train_syndiff(rank, gpu, args):
             errG_cycle_adv = errG_cycle_adv1 + errG_cycle_adv2
             
             #L1 loss 
-            errG1_L1 = F.l1_loss(x1_0_predict_diff[:,[0],:],real_data1)
-            errG2_L1 = F.l1_loss(x2_0_predict_diff[:,[0],:],real_data2)
+            errG1_L1 = F.l1_loss(x1_0_predict_diff[:, 0 : args.num_channels, :, :],real_data1)
+            errG2_L1 = F.l1_loss(x2_0_predict_diff[:, 0 : args.num_channels, :, :],real_data2)
             errG_L1 = errG1_L1 + errG2_L1 
             
             #cycle loss
@@ -680,10 +686,10 @@ def train_syndiff(rank, gpu, args):
             x1_t = torch.cat((torch.randn_like(real_data),source_data),axis=1)
             #diffusion steps
             fake_sample1 = sample_from_model(pos_coeff, gen_diffusive_1, args.num_timesteps, x1_t, T, args)            
-            fake_sample1 = to_range_0_1(fake_sample1) ; fake_sample1 = fake_sample1/fake_sample1.mean()
-            real_data = to_range_0_1(real_data) ; real_data = real_data/real_data.mean()
-
-            fake_sample1=fake_sample1.cpu().numpy()
+            fake_sample1 = to_range_0_1(fake_sample1) ; fake_sample1 = crop(fake_sample1) 
+            real_data = crop(real_data)
+            source_data = crop(source_data) 
+            syn_im1[:,:,:,iteration]=fake_sample1.cpu().numpy()
             real_data=real_data.cpu().numpy()
             val_l1_loss[0,epoch,iteration]=abs(fake_sample1 -real_data).mean()
             
@@ -729,116 +735,7 @@ def cleanup():
     dist.destroy_process_group()    
 #%%
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('syndiff parameters')
-    parser.add_argument('--seed', type=int, default=1024,
-                        help='seed used for initialization')
-    
-    parser.add_argument('--resume', action='store_true',default=False)
-    
-    parser.add_argument('--image_size', type=int, default=32,
-                            help='size of image')
-    parser.add_argument('--num_channels', type=int, default=3,
-                            help='channel of image')
-    parser.add_argument('--centered', action='store_false', default=True,
-                            help='-1,1 scale')
-    parser.add_argument('--use_geometric', action='store_true',default=False)
-    parser.add_argument('--beta_min', type=float, default= 0.1,
-                            help='beta_min for diffusion')
-    parser.add_argument('--beta_max', type=float, default=20.,
-                            help='beta_max for diffusion')
-    
-    
-    parser.add_argument('--num_channels_dae', type=int, default=128,
-                            help='number of initial channels in denosing model')
-    parser.add_argument('--n_mlp', type=int, default=3,
-                            help='number of mlp layers for z')
-    parser.add_argument('--ch_mult', nargs='+', type=int,
-                            help='channel multiplier')
-    parser.add_argument('--num_res_blocks', type=int, default=2,
-                            help='number of resnet blocks per scale')
-    parser.add_argument('--attn_resolutions', default=(16,),
-                            help='resolution of applying attention')
-    parser.add_argument('--dropout', type=float, default=0.,
-                            help='drop-out rate')
-    parser.add_argument('--resamp_with_conv', action='store_false', default=True,
-                            help='always up/down sampling with conv')
-    parser.add_argument('--conditional', action='store_false', default=True,
-                            help='noise conditional')
-    parser.add_argument('--fir', action='store_false', default=True,
-                            help='FIR')
-    parser.add_argument('--fir_kernel', default=[1, 3, 3, 1],
-                            help='FIR kernel')
-    parser.add_argument('--skip_rescale', action='store_false', default=True,
-                            help='skip rescale')
-    parser.add_argument('--resblock_type', default='biggan',
-                            help='tyle of resnet block, choice in biggan and ddpm')
-    parser.add_argument('--progressive', type=str, default='none', choices=['none', 'output_skip', 'residual'],
-                            help='progressive type for output')
-    parser.add_argument('--progressive_input', type=str, default='residual', choices=['none', 'input_skip', 'residual'],
-                        help='progressive type for input')
-    parser.add_argument('--progressive_combine', type=str, default='sum', choices=['sum', 'cat'],
-                        help='progressive combine method.')
-    
-    parser.add_argument('--embedding_type', type=str, default='positional', choices=['positional', 'fourier'],
-                        help='type of time embedding')
-    parser.add_argument('--fourier_scale', type=float, default=16.,
-                            help='scale of fourier transform')
-    parser.add_argument('--not_use_tanh', action='store_true',default=False)
-    
-    #geenrator and training
-    parser.add_argument('--exp', default='ixi_synth', help='name of experiment')
-    parser.add_argument('--input_path', help='path to input data')
-    parser.add_argument('--output_path', help='path to output saves')
-    parser.add_argument('--nz', type=int, default=100)
-    parser.add_argument('--num_timesteps', type=int, default=4)
-
-    parser.add_argument('--z_emb_dim', type=int, default=256)
-    parser.add_argument('--t_emb_dim', type=int, default=256)
-    parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
-    parser.add_argument('--num_epoch', type=int, default=1200)
-    parser.add_argument('--ngf', type=int, default=64)
-
-    parser.add_argument('--lr_g', type=float, default=1.5e-4, help='learning rate g')
-    parser.add_argument('--lr_d', type=float, default=1e-4, help='learning rate d')
-    parser.add_argument('--beta1', type=float, default=0.5,
-                            help='beta1 for adam')
-    parser.add_argument('--beta2', type=float, default=0.9,
-                            help='beta2 for adam')
-    parser.add_argument('--no_lr_decay',action='store_true', default=False)
-    
-    parser.add_argument('--use_ema', action='store_true', default=False,
-                            help='use EMA or not')
-    parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
-    
-    parser.add_argument('--r1_gamma', type=float, default=0.05, help='coef for r1 reg')
-    parser.add_argument('--lazy_reg', type=int, default=None,
-                        help='lazy regulariation.')
-
-    parser.add_argument('--save_content', action='store_true',default=False)
-    parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
-    parser.add_argument('--save_ckpt_every', type=int, default=10, help='save ckpt every x epochs')
-    parser.add_argument('--lambda_l1_loss', type=float, default=0.5, help='weightening of l1 loss part of diffusion ans cycle models')
-   
-    ###ddp
-    parser.add_argument('--num_proc_node', type=int, default=1,
-                        help='The number of nodes in multi node env.')
-    parser.add_argument('--num_process_per_node', type=int, default=1,
-                        help='number of gpus')
-    parser.add_argument('--node_rank', type=int, default=0,
-                        help='The index of node.')
-    parser.add_argument('--local_rank', type=int, default=0,
-                        help='rank of process in the node')
-    parser.add_argument('--master_address', type=str, default='127.0.0.1',
-                        help='address for master')
-    parser.add_argument('--contrast1', type=str, default='T1',
-                        help='contrast selection for model')
-    parser.add_argument('--contrast2', type=str, default='T2',
-                        help='contrast selection for model')
-    parser.add_argument('--port_num', type=str, default='6021',
-                        help='port selection for code')
-
-   
-    args = parser.parse_args()
+    args = TrainOptions().parse()
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
 
@@ -857,5 +754,4 @@ if __name__ == '__main__':
         for p in processes:
             p.join()
     else:
-        
         init_processes(0, size, train_syndiff, args)
